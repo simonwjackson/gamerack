@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+appName=$(basename "${0}")
+
+usage() {
+  cat <<EOU
+Usage:
+  $appName --database FILE [options] sync
+  $appName help
+
+Options:
+  -d --database FILE      YAML file to write to.
+  -h --help               Show this screen.
+EOU
+}
+
+eval "$(docopts -A ARGS -h "$(usage)" : "$@")"
+
+# Args
+ARGS['--database']="${ARGS['--database']:-${HOME}/.local/share/${appName}/database.yaml}"
+
+# Setup
+GAME_DATABASE_FILE="${ARGS['--database']}"
+
+touch "${GAME_DATABASE_FILE}"
+
+[ -s "${GAME_DATABASE_FILE}" ] || echo "---" >"${GAME_DATABASE_FILE}"
+
+ensure_games_query='.games |= if type!="array" then [] else . end'
+
+yq \
+  --in-place \
+  --yaml-output \
+  "${ensure_games_query}" \
+  "${GAME_DATABASE_FILE}" || {
+  echo "Your database is corrupted. Exiting."
+  exit
+}
+
+# Subcommands
+
+if [ "${ARGS[help]}" = true ]; then
+  $(basename "${0}") help
+elif [ "${ARGS[sync]}" = true ]; then
+  source ./steam.sh "ARGS"
+  source ./mobygames.sh "ARGS"
+fi
+
+# for a in "${!ARGS[@]}"; do
+#   echo "$a = ${ARGS[$a]}"
+# done
