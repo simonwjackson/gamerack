@@ -11,7 +11,7 @@ inputs: {
   cfg = config.services.gamerack;
 in {
   options.services.${pname} = {
-    enable = lib.mkEnableOption "Game Collection Sync";
+    enable = lib.mkEnableOption "gamerack";
 
     settings = lib.mkOption {
       type = lib.types.attrs;
@@ -34,7 +34,7 @@ in {
       type = lib.types.listOf lib.types.path;
       default = [];
       example = ["/etc/${pname}/env" "/etc/${pname}/env-secret"];
-      description = "List of environment files to be passed to the Game Collection Sync application.";
+      description = "List of environment files to be passed to the gamerack application.";
     };
 
     environment = lib.mkOption {
@@ -50,7 +50,7 @@ in {
   config = lib.mkIf cfg.enable {
     systemd = {
       services.${pname} = {
-        description = "Game Collection Sync Service";
+        description = "gamerack Service";
         after = ["network.target"];
         wantedBy = ["multi-user.target"];
         serviceConfig = {
@@ -66,7 +66,7 @@ in {
       };
 
       timers.${pname} = {
-        description = "Game Collection Sync Timer";
+        description = "gamerack Timer";
         partOf = ["${pname}.service"];
         wantedBy = ["timers.target"];
         timerConfig.OnCalendar = cfg.interval;
