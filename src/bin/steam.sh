@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
 
-main() {
-  # local -n args=$1
-
+check_environment_variables() {
   missing_vars=()
 
   [[ -z "${STEAM_API_KEY}" ]] && missing_vars+=("STEAM_API_KEY")
   [[ -z "${STEAM_ID}" ]] && missing_vars+=("STEAM_ID")
 
-  # If there are any missing variables, show them and exit
   if [ ${#missing_vars[@]} -ne 0 ]; then
     echo "Missing environment variables: ${missing_vars[*]}"
     exit 1
   fi
+}
 
-  # printf "Finding all owned steam games.."
-
+get_steam_app_ids() {
   steam_app_ids=$(
     {
       curl \
@@ -34,6 +31,10 @@ main() {
       uniq --unique
   )
 
+  echo "${steam_app_ids}"
+}
+
+update_game_database() {
   new_steam_games=$(
     jq \
       --slurp \
@@ -48,9 +49,9 @@ main() {
     --argjson new_steam_games "${new_steam_games}" \
     '.games += [$''new_steam_games[]]' \
     "${GAME_DATABASE_FILE}"
+}
 
-  printf "done\n"
-
+get_app_ids_without_meta() {
   without_meta=$(
     yq \
       --compact-output \
@@ -68,56 +69,58 @@ main() {
       "${GAME_DATABASE_FILE}"
   )
 
-  IFS=$'\n' read -rd '' -a appid_array <<<"${without_meta}"
-  for steam_app_id in "${appid_array[@]}"; do
-    # TODO: curl might fail for many reasons, account for this.
+  echo "${without_meta}"
+}
 
-    details=$(
-      curl \
-        --show-error \
-        --silent \
-        --location \
-        "https://store.steampowered.com/api/appdetails?appids={$steam_app_id}"
-    )
+update_game_details() {
+  local steam_app_id=$1
 
-    original_entry=$(
-      yq \
-        --compact-output \
-        --arg APPID "${steam_app_id}" \
-        '.games[] | select(.store.steam.id == ($''APPID | tonumber))' \
-        "${GAME_DATABASE_FILE}"
-    )
+  details=$(
+    curl \
+      --show-error \
+      --silent \
+      --location \
+      "https://store.steampowered.com/api/appdetails?appids={$steam_app_id}"
+  )
 
-    if ! jq --arg APPID "${steam_app_id}" --exit-status '.[$APPID].data' <<<"${details}" &>/dev/null; then
-      echo "Removed from store: ${steam_app_id}"
+  original_entry=$(
+    yq \
+      --compact-output \
+      --arg APPID "${steam_app_id}" \
+      '.games[] | select(.store.steam.id == ($''APPID | tonumber))' \
+      "${GAME_DATABASE_FILE}"
+  )
 
-      new_data=$(
-        {
-          echo -e '{
+  if ! jq --arg APPID "${steam_app_id}" --exit-status '.[$APPID].data' <<<"${details}" &>/dev/null; then
+    echo "Removed from store: ${steam_app_id}"
+
+    new_data=$(
+      {
+        echo -e '{
           "store": {
             "steam": {
               "removed": true
             }
           }
         }'
-          echo -e "${original_entry}"
-        } |
-          jq \
-            --compact-output \
-            --slurp \
-            -r \
-            '.[0] * .[1]'
-      )
-    else
-      echo "Steam: ${steam_app_id}"
+        echo -e "${original_entry}"
+      } |
+        jq \
+          --compact-output \
+          --slurp \
+          -r \
+          '.[0] * .[1]'
+    )
+  else
+    echo "Steam: ${steam_app_id}"
 
-      new_data=$(
-        {
-          jq \
-            --compact-output \
-            --raw-output \
-            --arg APPID "${steam_app_id}" \
-            '.[$APPID].data | {
+    new_data=$(
+      {
+        jq \
+          --compact-output \
+          --raw-output \
+          --arg APPID "${steam_app_id}" \
+          '.[$APPID].data | {
             name: .name?,
             platform: "steam",
             released: .release_date?,
@@ -144,23 +147,24 @@ main() {
               short: (.short_description? | gsub("[^\\x20-\\x7E]"; ""))
             }
           }' \
-            <<<"${details}"
-          echo -e "$original_entry"
-        } |
-          jq --slurp -r '.[0] * .[1]'
-      )
-    fi
+          <<<"${details}"
+        echo -e "$original_entry"
+      } |
+        jq --slurp -r '.[0] * .[1]'
+    )
+  fi
 
-    yq \
-      --in-place \
-      --yaml-output \
-      --argjson pipe "${new_data}" \
-      '(.games[] | select(.store.steam.id == $''pipe.store.steam.id) | .) |= $''pipe' \
-      "${GAME_DATABASE_FILE}"
+  yq \
+    --in-place \
+    --yaml-output \
+    --argjson pipe "${new_data}" \
+    '(.games[] | select(.store.steam.id == $''pipe.store.steam.id) | .) |= $''pipe' \
+    "${GAME_DATABASE_FILE}"
 
-    sleep 2
-  done
+  sleep 2
+}
 
+get_app_ids_without_review() {
   without_review=$(
     yq \
       --compact-output \
@@ -174,52 +178,61 @@ main() {
       "${GAME_DATABASE_FILE}"
   )
 
+  echo "${without_review}"
+}
+
+update_game_reviews() {
+  local appid=$1
+
+  read -r total_positive total_reviews < <(
+    curl \
+      --show-error \
+      --silent \
+      --location \
+      "https://store.steampowered.com/appreviews/{$appid}?json=1" |
+      jq \
+        --raw-output \
+        '.query_summary | "\(.total_positive) \(.total_reviews)"'
+  )
+
+  sleep 2
+
+  z=1.96
+  n=$total_reviews
+  p=$(echo "scale=10; $total_positive/$n" | bc)
+
+  wilson_score_percentage=$(
+    echo "scale=10; ($p + ($z^2)/(2*$n) - $z*sqrt(($p*(1-$p))/$n + ($z^2)/(4*$n^2)))/(1+($z^2)/$n)*100" |
+      bc
+  )
+
+  yq \
+    --in-place \
+    --yaml-output \
+    --arg SCORE "$(printf "%.0f" "${wilson_score_percentage}")" \
+    --arg APPID "${appid}" \
+    '(.games[] | select(.store.steam.id == $''APPID)).score.steam |= ($''SCORE | tonumber)' \
+    "${GAME_DATABASE_FILE}"
+}
+
+main() {
+  # local -n args=$1
+
+  check_environment_variables
+
+  steam_app_ids=$(get_steam_app_ids)
+  update_game_database
+
+  without_meta=$(get_app_ids_without_meta)
+  IFS=$'\n' read -rd '' -a appid_array <<<"${without_meta}"
+  for steam_app_id in "${appid_array[@]}"; do
+    update_game_details "${steam_app_id}"
+  done
+
+  without_review=$(get_app_ids_without_review)
   IFS=$'\n' read -rd '' -a appid_array <<<"${without_review}"
   for appid in "${appid_array[@]}"; do
-    # TODO: curl might fail for many reasons, account for this.
-
-    # read -r total_positive total_reviews <<<"$(
-    #   curl \
-    #     --show-error \
-    #     --silent \
-    #     --location \
-    #     "https://store.steampowered.com/appreviews/{$appid}?json=1" |
-    #     jq \
-    #       --raw-output \
-    #       '.query_summary | "\(.total_positive) \(.total_reviews)"'
-    # )"
-
-    read -r total_positive total_reviews < <(
-      curl \
-        --show-error \
-        --silent \
-        --location \
-        "https://store.steampowered.com/appreviews/{$appid}?json=1" |
-        jq \
-          --raw-output \
-          '.query_summary | "\(.total_positive) \(.total_reviews)"'
-    )
-
-    sleep 2
-
-    z=1.96
-    n=$total_reviews
-    p=$(echo "scale=10; $total_positive/$n" | bc)
-
-    # TODO: Somehwere here were dividing by zero. game removed from steam?
-
-    wilson_score_percentage=$(
-      echo "scale=10; ($p + ($z^2)/(2*$n) - $z*sqrt(($p*(1-$p))/$n + ($z^2)/(4*$n^2)))/(1+($z^2)/$n)*100" |
-        bc
-    )
-
-    yq \
-      --in-place \
-      --yaml-output \
-      --arg SCORE "$(printf "%.0f" "${wilson_score_percentage}")" \
-      --arg APPID "${appid}" \
-      '(.games[] | select(.store.steam.id == $''APPID)).score.steam |= ($''SCORE | tonumber)' \
-      "${GAME_DATABASE_FILE}"
+    update_game_reviews "${appid}"
   done
 }
 

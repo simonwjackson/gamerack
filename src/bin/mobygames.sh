@@ -1,36 +1,37 @@
 #!/usr/bin/env bash
 
+CURL_OPTS=(
+  --show-error
+  --silent
+  -H 'Accept-Encoding: gzip, deflate, br'
+  -H 'Accept-Language: en-US,en;q=0.5'
+  -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+  -H 'Connection: keep-alive'
+  -H 'Content-Type: application/x-www-form-urlencoded'
+  -H 'Origin: https://www.mobygames.com'
+  -H 'Save-Data: on'
+  -H 'Sec-Fetch-Dest: document'
+  -H 'Sec-Fetch-Mode: navigate'
+  -H 'Sec-Fetch-Site: same-origin'
+  -H 'Sec-Fetch-User: ?1'
+  -H 'TE: trailers'
+  -H 'Upgrade-Insecure-Requests: 1'
+  -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0'
+)
+
 login_to_mobygames() {
   csrf_token=$(
     curl \
-      --show-error \
-      --silent \
       --cookie-jar "${MOBY_COOKIE_FILE}" \
       'https://www.mobygames.com/user/login/' |
       pup 'body input[name="_csrf_token"] attr{value}'
   )
 
   curl \
-    --show-error \
-    --silent \
     --cookie "${MOBY_COOKIE_FILE}" \
     --cookie-jar "${MOBY_COOKIE_FILE}" \
     -X POST \
-    -H 'Accept-Encoding: gzip, deflate, br' \
-    -H 'Accept-Language: en-US,en;q=0.5' \
-    -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8' \
-    -H 'Connection: keep-alive' \
-    -H 'Content-Type: application/x-www-form-urlencoded' \
-    -H 'Origin: https://www.mobygames.com' \
-    -H 'Referer: https://www.mobygames.com/user/login/' \
-    -H 'Save-Data: on' \
-    -H 'Sec-Fetch-Dest: document' \
-    -H 'Sec-Fetch-Mode: navigate' \
-    -H 'Sec-Fetch-Site: same-origin' \
-    -H 'Sec-Fetch-User: ?1' \
-    -H 'TE: trailers' \
-    -H 'Upgrade-Insecure-Requests: 1' \
-    -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0' \
+    "${CURL_OPTS[@]}" \
     --data-raw "_csrf_token=${csrf_token}&login=${MOBY_USERNAME}&password=${MOBY_PASSWORD}" \
     'https://www.mobygames.com/user/login/' &>/dev/null
 }
@@ -38,24 +39,8 @@ login_to_mobygames() {
 get_moby_ids() {
   {
     curl \
-      --show-error \
-      --silent \
       --cookie "${MOBY_COOKIE_FILE}" \
-      -H 'Accept-Encoding: gzip, deflate, br' \
-      -H 'Accept-Language: en-US,en;q=0.5' \
-      -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8' \
-      -H 'Connection: keep-alive' \
-      -H 'Content-Type: application/x-www-form-urlencoded' \
-      -H 'Origin: https://www.mobygames.com' \
-      -H 'Referer: https://www.mobygames.com/user/login/' \
-      -H 'Save-Data: on' \
-      -H 'Sec-Fetch-Dest: document' \
-      -H 'Sec-Fetch-Mode: navigate' \
-      -H 'Sec-Fetch-Site: same-origin' \
-      -H 'Sec-Fetch-User: ?1' \
-      -H 'TE: trailers' \
-      -H 'Upgrade-Insecure-Requests: 1' \
-      -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0' \
+      "${CURL_OPTS[@]}" \
       "https://www.mobygames.com/user/list/export/Collection_${MOBY_COLLECTION_ID}_public.csv" |
       mlr \
         --c2j \
