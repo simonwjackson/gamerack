@@ -17,15 +17,8 @@
         pkgs = nixpkgs.legacyPackages.${system};
         gamerack = import ./nix/default.nix {inherit pkgs;};
         gamerack-module = import ./nix/module.nix inputs;
-        docker = pkgs.dockerTools.buildLayeredImage {
-          name = "gamerack";
-          tag = "latest";
-          config = {
-            Cmd = ["${gamerack}/bin/gamerack"];
-          };
-          contents = [
-            gamerack
-          ];
+        docker = import ./nix/docker.nix {
+          inherit pkgs gamerack;
         };
       in {
         packages.gamerack = gamerack;
