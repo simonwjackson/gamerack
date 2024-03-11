@@ -12,64 +12,75 @@ check_environment_variables() {
   fi
 }
 
-get_steam_app_ids() {
-  steam_app_ids=$(
-    {
-      curl \
-        --show-error \
-        --silent \
-        --location \
-        "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${STEAM_API_KEY}&steamid=${STEAM_ID}&format=json" |
-        jq \
-          --raw-output \
-          '.response.games[] | .appid'
-      yq \
-        '.games[].store.steam.id' \
-        "${GAME_DATABASE_FILE}"
-    } |
-      sort --numeric-sort |
-      uniq --unique
-  )
+steam_api_url() {
+  case "$1" in
+  "reviews")
+    echo "https://store.steampowered.com/appreviews/{$2}?json=1"
+    ;;
+  "owned_games")
+    echo "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${2}&steamid=${3}&format=json"
+    ;;
+  "details")
+    echo "https://store.steampowered.com/api/appdetails?appids={$2}"
+    ;;
+  *)
+    echo "Invalid steam_api_url option."
+    exit
+    ;;
+  esac
+}
 
-  echo "${steam_app_ids}"
+get_new_steam_app_ids() {
+  {
+    curl \
+      --show-error \
+      --silent \
+      --location \
+      "$(steam_api_url owned_games "${STEAM_API_KEY}" "${STEAM_ID}")" |
+      jq \
+        --raw-output \
+        '.response.games[] | .appid'
+    yq \
+      --output-format json \
+      '.games[].store.steam.id' \
+      "${GAME_DATABASE_FILE}"
+  } |
+    sort --numeric-sort |
+    uniq --unique
 }
 
 update_game_database() {
   new_steam_games=$(
-    jq \
-      --slurp \
-      --compact-output \
-      '[.[] | { store: { steam: { id: tonumber }}}]' \
-      <<<"${steam_app_ids}"
-  )
-
-  yq \
-    --in-place \
-    --yaml-output \
-    --argjson new_steam_games "${new_steam_games}" \
-    '.games += [$''new_steam_games[]]' \
+    get_new_steam_app_ids |
+      jq \
+        --slurp \
+        --compact-output \
+        '[.[] | { store: { steam: { id: tonumber }}}]'
+  ) yq eval \
+    --prettyPrint \
+    --inplace \
+    --output-format yaml \
+    '.games += (strenv(new_steam_games) | fromjson)' \
     "${GAME_DATABASE_FILE}"
 }
 
 get_app_ids_without_meta() {
-  without_meta=$(
-    yq \
-      --compact-output \
-      --exit-status \
-      '.games[]
-     | select(
-       .store.steam.id != null
-       and (has("name") | not)
-       and (
-         .store.steam.removed != true
-         or .store.steam.removed == null
+  yq \
+    --output-format json \
+    --exit-status \
+    '.games[]
+       | select(
+         .store.steam.id != null
+         and (has("name") | not)
+         and (
+           .store.steam.removed != true
+           or .store.steam.removed == null
+         )
        )
-     )
-     | .store.steam.id' \
-      "${GAME_DATABASE_FILE}"
-  )
-
-  echo "${without_meta}"
+       | .store.steam.id' \
+    "${GAME_DATABASE_FILE}" |
+    jq \
+      --compact-output
 }
 
 update_game_details() {
@@ -80,19 +91,21 @@ update_game_details() {
       --show-error \
       --silent \
       --location \
-      "https://store.steampowered.com/api/appdetails?appids={$steam_app_id}"
+      "$(steam_api_url details "${steam_app_id}")"
   )
 
   original_entry=$(
-    yq \
-      --compact-output \
-      --arg APPID "${steam_app_id}" \
-      '.games[] | select(.store.steam.id == ($''APPID | tonumber))' \
-      "${GAME_DATABASE_FILE}"
+    APP_ID="$steam_app_id" yq \
+      --output-format json \
+      '.games[] | select(.store.steam.id == (strenv(APP_ID)))' \
+      "${GAME_DATABASE_FILE}" |
+      jq \
+        --compact-output
   )
 
   if ! jq --arg APPID "${steam_app_id}" --exit-status '.[$APPID].data' <<<"${details}" &>/dev/null; then
     echo "Removed from store: ${steam_app_id}"
+    export new_data
 
     new_data=$(
       {
@@ -154,46 +167,52 @@ update_game_details() {
     )
   fi
 
-  yq \
-    --in-place \
-    --yaml-output \
-    --argjson pipe "${new_data}" \
-    '(.games[] | select(.store.steam.id == $''pipe.store.steam.id) | .) |= $''pipe' \
+  # TODO: This selector seems to be broken with the upgrade to yq 4.0
+  NEW_DATA="${new_data}" STEAM_APP_ID="${steam_app_id}" yq \
+    --prettyPrint \
+    --inplace \
+    --output-format yaml \
+    '(.games[] | select(.store.steam.id == strenv(STEAM_APP_ID)) | .) |= (strenv(NEW_DATA) | fromjson)' \
     "${GAME_DATABASE_FILE}"
 
   sleep 2
 }
 
 get_app_ids_without_review() {
-  without_review=$(
-    yq \
-      --compact-output \
-      '.games[]
+  yq \
+    --output-format json \
+    '.games[]
      | select(
          .store.steam.id != null
          and .score.steam == null
        )
      | .store.steam.id
     ' \
-      "${GAME_DATABASE_FILE}"
-  )
-
-  echo "${without_review}"
+    "${GAME_DATABASE_FILE}" |
+    jq \
+      --compact-output
 }
 
 update_game_reviews() {
-  local appid=$1
+  local app_id=$1
+
+  echo "Fetching review: ${app_id}"
 
   read -r total_positive total_reviews < <(
     curl \
       --show-error \
       --silent \
       --location \
-      "https://store.steampowered.com/appreviews/{$appid}?json=1" |
+      "$(steam_api_url reviews "${app_id}")" |
       jq \
         --raw-output \
         '.query_summary | "\(.total_positive) \(.total_reviews)"'
   )
+
+  if ! [[ $total_positive =~ ^[0-9]+$ ]] || ! [[ $total_reviews =~ ^[0-9]+$ ]]; then
+    echo "Invalid total_positive or total_reviews value. Skipping.."
+    return
+  fi
 
   sleep 2
 
@@ -206,12 +225,15 @@ update_game_reviews() {
       bc
   )
 
-  yq \
-    --in-place \
-    --yaml-output \
-    --arg SCORE "$(printf "%.0f" "${wilson_score_percentage}")" \
-    --arg APPID "${appid}" \
-    '(.games[] | select(.store.steam.id == $''APPID)).score.steam |= ($''SCORE | tonumber)' \
+  if ! [[ $wilson_score_percentage =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "Invalid wilson_score_percentage value. Skipping.."
+    return
+  fi
+
+  APPID="${app_id}" SCORE="$(printf "%.0f" "${wilson_score_percentage}")" yq eval \
+    --inplace \
+    --output-format yaml \
+    '(.games[] | select(.store.steam.id == strenv(APPID))).score.steam |= env(SCORE)' \
     "${GAME_DATABASE_FILE}"
 }
 
@@ -220,7 +242,6 @@ main() {
 
   check_environment_variables
 
-  steam_app_ids=$(get_steam_app_ids)
   update_game_database
 
   without_meta=$(get_app_ids_without_meta)
@@ -231,8 +252,8 @@ main() {
 
   without_review=$(get_app_ids_without_review)
   IFS=$'\n' read -rd '' -a appid_array <<<"${without_review}"
-  for appid in "${appid_array[@]}"; do
-    update_game_reviews "${appid}"
+  for app_id in "${appid_array[@]}"; do
+    update_game_reviews "${app_id}"
   done
 }
 

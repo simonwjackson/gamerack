@@ -66,17 +66,18 @@ get_new_games() {
         '[.[] | { store: { moby: { id: tonumber }}}]'
   )
 
-  yq \
-    --in-place \
-    --yaml-output \
-    --argjson new_numbers "${new_games}" \
-    '.games += [$''new_numbers[]]' \
+  new_moby_games="${new_games}" yq \
+    --prettyPrint \
+    --inplace \
+    --output-format yaml \
+    '.games += (strenv(new_moby_games) | fromjson)' \
     "${GAME_DATABASE_FILE}"
 }
 
 fetch_game_details() {
   local app_id=$1
   echo "ID: $app_id"
+
   details=$(
     curl \
       --show-error \
@@ -96,6 +97,11 @@ fetch_game_details() {
           score: {
             moby: .moby_score?
           },
+          store: {
+            moby: {
+              id: $APPID | tonumber
+            }
+          },
           platform: .platforms?[0].platform_name?,
           media: {
             images: {
@@ -104,9 +110,9 @@ fetch_game_details() {
             }
           }
         }'
-      yq \
-        --arg APPID "${app_id}" \
-        '.games[] | select(.store.moby.id == ($''APPID | tonumber))' "${GAME_DATABASE_FILE}"
+      APP_ID="${app_id}" yq \
+        '.games[] | select(.store.moby.id == strenv(APPID))' \
+        "${GAME_DATABASE_FILE}"
     } |
       jq \
         --slurp \
@@ -114,11 +120,12 @@ fetch_game_details() {
         '(.[0] // {}) * (.[1] // {})'
   )
 
-  yq \
-    --yaml-output \
-    --in-place \
-    --argjson NEW_DATA "${new_data}" \
-    '( .games[] | select(.store.moby.id == $''NEW_DATA.store.moby.id) | . ) |= $''NEW_DATA' "${GAME_DATABASE_FILE}"
+  NEW_DATA="${new_data}" APP_ID="${app_id}" yq \
+    --prettyPrint \
+    --inplace \
+    --output-format yaml \
+    '(.games[] | select(.store.moby.id == strenv(APP_ID)) | . ) |= (strenv(NEW_DATA) | fromjson)' \
+    "${GAME_DATABASE_FILE}"
 }
 
 main() {

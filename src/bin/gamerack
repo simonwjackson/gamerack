@@ -26,13 +26,13 @@ touch "${GAME_DATABASE_FILE}"
 
 [ -s "${GAME_DATABASE_FILE}" ] || echo "---" >"${GAME_DATABASE_FILE}"
 
-ensure_games_query='.games |= if type!="array" then [] else . end'
+ensure_games_query='.games = ((.games | select(type == "!!seq")) // [])'
 
 yq \
-  --in-place \
-  --yaml-output \
   "${ensure_games_query}" \
-  "${GAME_DATABASE_FILE}" || {
+  "${GAME_DATABASE_FILE}" \
+  --inplace \
+  --output-format yaml || {
   echo "Your database is corrupted. Exiting."
   exit
 }
@@ -42,8 +42,8 @@ yq \
 if [ "${ARGS[help]}" = true ]; then
   $(basename "${0}") help
 elif [ "${ARGS[sync]}" = true ]; then
-  source ./steam.sh "ARGS"
   source ./mobygames.sh "ARGS"
+  source ./steam.sh "ARGS"
 fi
 
 # for a in "${!ARGS[@]}"; do

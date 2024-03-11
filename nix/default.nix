@@ -37,7 +37,7 @@ pkgs.resholve.mkDerivation rec {
         gawk
         jq
         miller
-        yq
+        yq-go
       ];
       execer = [
         "cannot:${pkgs.docopts}/bin/docopts"
@@ -45,7 +45,7 @@ pkgs.resholve.mkDerivation rec {
         "cannot:${pkgs.miller}/bin/mlr"
         "cannot:${pkgs.pup}/bin/pup"
         "cannot:${pkgs.wget}/bin/wget"
-        "cannot:${pkgs.yq}/bin/yq"
+        "cannot:${pkgs.yq-go}/bin/yq"
       ];
     };
   };
